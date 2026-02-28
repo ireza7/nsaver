@@ -1,0 +1,8 @@
+services:
+  nsaver:
+    build: .
+    container_name: nsaver
+    env_file:
+      - .env
+    # Container runs once and exits
+    restart: "no"
