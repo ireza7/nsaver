@@ -1,13 +1,5 @@
 .env
-.git
-__pycache__
-*.pyc
-*.pyo
-.venv
-venv
-.mypy_cache
-README.md
-.env.example
-docker-compose.yml
-.dockerignore
-.gitignore
+node_modules/
+dist/
+*.log
+tmp/

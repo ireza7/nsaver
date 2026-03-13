@@ -1,10 +1,6 @@
 .env
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
-*.egg-info/
+node_modules/
 dist/
-build/
+*.log
+tmp/
 .mypy_cache/
