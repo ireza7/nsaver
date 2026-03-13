@@ -4,7 +4,7 @@
   "description": "nhentai favorites exporter Telegram bot with PDF generation, channel caching, and nZip integration",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/db/migrations dist/db/migrations",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "db:generate": "drizzle-kit generate",
