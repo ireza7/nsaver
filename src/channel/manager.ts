@@ -159,7 +159,7 @@ export async function uploadToChannel(
 export async function findCachedExport(
   userId: number,
   filterHash: string
-): Promise<{ messageId: number; fileId: string } | null> {
+): Promise<{ messageId: number; fileId: string; description: string | null } | null> {
   const db = getDb();
 
   const rows = await db
@@ -179,6 +179,7 @@ export async function findCachedExport(
   return {
     messageId: row.telegramMessageId,
     fileId: row.telegramFileId,
+    description: row.description,
   };
 }
 
@@ -189,7 +190,8 @@ export async function forwardCachedExport(
   bot: TelegramBot,
   chatId: number,
   fileId: string,
-  coverGallery?: Gallery
+  coverGallery?: Gallery,
+  description?: string | null
 ): Promise<void> {
   log.info(`Forwarding cached document to ${chatId}`);
 
@@ -208,8 +210,9 @@ export async function forwardCachedExport(
     }
   }
 
+  const caption = description || "📎 Here's your favorites export!";
   await bot.sendDocument(chatId, fileId, {
-    caption: "📎 Here's your favorites export!",
+    caption: truncate(caption, 1024),
   });
 }
 

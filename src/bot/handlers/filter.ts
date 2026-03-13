@@ -83,7 +83,11 @@ export function registerFilterHandler(bot: TelegramBot): void {
       const cached = await findCachedExport(userId, filterHash);
       if (cached) {
         await bot.sendMessage(chatId, "📦 Found cached export...");
-        await forwardCachedExport(bot, chatId, cached.fileId);
+        // Fetch gallery info from DB for cover thumbnail + description
+        const { getUserGalleries } = await import("../../services/gallery.js");
+        const userGalleries = await getUserGalleries(userId);
+        const coverGallery = userGalleries.length > 0 ? userGalleries[0] : undefined;
+        await forwardCachedExport(bot, chatId, cached.fileId, coverGallery, cached.description);
         return;
       }
 
@@ -264,7 +268,11 @@ export function registerFilterHandler(bot: TelegramBot): void {
       const cached = await findCachedExport(userId, filterHash);
       if (cached) {
         await bot.sendMessage(chatId, "📦 Found cached export...");
-        await forwardCachedExport(bot, chatId, cached.fileId);
+        // Fetch gallery info from DB for cover thumbnail + description
+        const { getUserGalleries } = await import("../../services/gallery.js");
+        const userGalleries = await getUserGalleries(userId);
+        const coverGallery = userGalleries.length > 0 ? userGalleries[0] : undefined;
+        await forwardCachedExport(bot, chatId, cached.fileId, coverGallery, cached.description);
         return;
       }
 
