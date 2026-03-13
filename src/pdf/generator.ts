@@ -25,7 +25,7 @@ async function downloadAllThumbnails(
   const batchSize = 5;
   for (let i = 0; i < galleries.length; i += batchSize) {
     const batch = galleries.slice(i, i + batchSize);
-    const results = await Promise.allSettled(
+    await Promise.allSettled(
       batch.map(async (g) => {
         if (!g.thumbnail) return null;
         const localPath = await downloadThumbnail(g.thumbnail, g.id);
@@ -45,12 +45,20 @@ async function downloadAllThumbnails(
 const THUMB_WIDTH = 60;
 const THUMB_HEIGHT = 85;
 
-/** Generate a compact PDF of galleries list with embedded cover images */
+/**
+ * Generate a compact PDF of galleries list with embedded cover images.
+ * Throws an error if no galleries are provided or if all thumbnail
+ * downloads fail for a single-gallery PDF (to prevent empty PDFs).
+ */
 export async function generatePdf(
   galleries: Gallery[],
   username: string,
   filterInfo?: string
 ): Promise<string> {
+  if (galleries.length === 0) {
+    throw new Error("No galleries provided for PDF generation");
+  }
+
   const tmpDir = path.join(os.tmpdir(), "nsaver-pdfs");
   if (!fs.existsSync(tmpDir)) {
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -62,6 +70,25 @@ export async function generatePdf(
 
   // Pre-download all thumbnails
   const thumbMap = await downloadAllThumbnails(galleries);
+
+  // For single gallery PDFs, if the thumbnail failed to download,
+  // throw an error instead of generating an empty/useless PDF.
+  if (galleries.length === 1 && thumbMap.size === 0) {
+    const g = galleries[0];
+    throw new Error(
+      `Failed to download thumbnail for gallery #${g.id}. ` +
+      `The image CDN may be unreachable or the gallery cover is unavailable. ` +
+      `Thumbnail URL: ${g.thumbnail || "(none)"}`
+    );
+  }
+
+  // For multi-gallery PDFs, warn but continue (text-only PDF is still useful)
+  if (galleries.length > 1 && thumbMap.size === 0) {
+    log.warn(
+      `All ${galleries.length} thumbnail downloads failed. ` +
+      `PDF will be generated without cover images.`
+    );
+  }
 
   return new Promise((resolve, reject) => {
     try {
@@ -106,6 +133,25 @@ export async function generatePdf(
           .text(`Filter: ${filterInfo}`, { align: "center" });
       }
 
+      // Show warning if thumbnails partially failed
+      if (thumbMap.size < galleries.length && thumbMap.size > 0) {
+        doc
+          .fontSize(8)
+          .fillColor("#cc6600")
+          .text(
+            `Note: ${galleries.length - thumbMap.size} of ${galleries.length} cover images could not be loaded`,
+            { align: "center" }
+          );
+      } else if (thumbMap.size === 0) {
+        doc
+          .fontSize(8)
+          .fillColor("#cc0000")
+          .text(
+            `Warning: Cover images could not be loaded from the image CDN`,
+            { align: "center" }
+          );
+      }
+
       doc.moveDown(1);
       doc
         .strokeColor("#cccccc")
@@ -135,6 +181,7 @@ export async function generatePdf(
         const rowStartY = doc.y;
 
         // Try to embed the thumbnail image
+        let imageEmbedded = false;
         if (thumbPath && fs.existsSync(thumbPath)) {
           try {
             doc.image(thumbPath, pageMargin, rowStartY, {
@@ -142,14 +189,15 @@ export async function generatePdf(
               height: THUMB_HEIGHT,
               fit: [THUMB_WIDTH, THUMB_HEIGHT],
             });
+            imageEmbedded = true;
           } catch (imgErr: any) {
             log.warn(`Failed to embed image for ${g.id}: ${imgErr.message}`);
           }
         }
 
         // Text content positioned next to the thumbnail
-        const textX = thumbPath ? textXOffset : pageMargin;
-        const currentTextWidth = thumbPath ? textWidth : contentWidth;
+        const textX = imageEmbedded ? textXOffset : pageMargin;
+        const currentTextWidth = imageEmbedded ? textWidth : contentWidth;
 
         // Gallery number + ID + title
         doc
@@ -186,7 +234,7 @@ export async function generatePdf(
 
         // Ensure the cursor moves past the thumbnail height
         const textEndY = doc.y;
-        const minEndY = rowStartY + THUMB_HEIGHT + 5;
+        const minEndY = rowStartY + (imageEmbedded ? THUMB_HEIGHT : 0) + 5;
         if (textEndY < minEndY) {
           doc.y = minEndY;
         }
@@ -214,8 +262,8 @@ export async function generatePdf(
 
       stream.on("finish", () => {
         // Clean up downloaded thumbnails
-        for (const [, thumbPath] of thumbMap) {
-          cleanupThumbnail(thumbPath);
+        for (const [, tp] of thumbMap) {
+          cleanupThumbnail(tp);
         }
 
         const stats = fs.statSync(filePath);
@@ -227,15 +275,15 @@ export async function generatePdf(
 
       stream.on("error", (err) => {
         // Clean up thumbnails even on error
-        for (const [, thumbPath] of thumbMap) {
-          cleanupThumbnail(thumbPath);
+        for (const [, tp] of thumbMap) {
+          cleanupThumbnail(tp);
         }
         reject(err);
       });
     } catch (err) {
       // Clean up thumbnails on sync error
-      for (const [, thumbPath] of thumbMap) {
-        cleanupThumbnail(thumbPath);
+      for (const [, tp] of thumbMap) {
+        cleanupThumbnail(tp);
       }
       reject(err);
     }
