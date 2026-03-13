@@ -157,7 +157,7 @@ export function handleSessionStep(
         state.step = "csrfToken";
         await bot.sendMessage(
           chatId,
-          "✅ sessionid received.\n\nلطفاً مقدار `csrftoken` را ارسال کنید:",
+          "✅ sessionid received\\.\n\nلطفاً مقدار `csrftoken` را ارسال کنید:",
           { parse_mode: "MarkdownV2" }
         );
       } else if (state.step === "csrfToken") {
@@ -165,7 +165,7 @@ export function handleSessionStep(
         state.step = "cfClearance";
         await bot.sendMessage(
           chatId,
-          "✅ csrftoken received.\n\nلطفاً مقدار `cf_clearance` را ارسال کنید:",
+          "✅ csrftoken received\\.\n\nلطفاً مقدار `cf_clearance` را ارسال کنید:",
           { parse_mode: "MarkdownV2" }
         );
       } else if (state.step === "cfClearance") {
