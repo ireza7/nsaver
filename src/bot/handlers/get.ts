@@ -1,6 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import { ensureUser, getActiveSession } from "../../services/user.js";
-import { fetchGalleryDetail } from "../../scraper/favorites.js";
+import { fetchGalleryDetail, fetchGalleryPublic } from "../../scraper/favorites.js";
 import { generatePdf, cleanupPdf } from "../../pdf/index.js";
 import { uploadToChannel, findCachedExport, forwardCachedExport } from "../../channel/manager.js";
 import { createLogger, hashFilters } from "../../utils/index.js";
@@ -13,7 +13,79 @@ const log = createLogger("handler:get");
 const getLocks = new Set<number>();
 
 /**
+ * Fetch gallery info. Tries public API first, falls back to
+ * session-based scraping if the user has an active session.
+ */
+async function fetchGallery(
+  galleryId: number,
+  session: { sessionId: string; csrfToken: string; cfClearance: string; userAgent: string | null } | null
+): Promise<Gallery> {
+  // Always try the public API first (no session needed)
+  try {
+    return await fetchGalleryPublic(galleryId);
+  } catch (publicErr: any) {
+    log.warn(`Public API failed for #${galleryId}: ${publicErr.message}`);
+  }
+
+  // Fall back to session-based scraping if we have a session
+  if (!session) {
+    throw new Error("Gallery not accessible via public API and no session is configured.");
+  }
+
+  const nhSession: NhentaiSession = {
+    sessionId: session.sessionId,
+    csrfToken: session.csrfToken,
+    cfClearance: session.cfClearance,
+    userAgent: session.userAgent || undefined,
+  };
+
+  const detail = await fetchGalleryDetail(galleryId, nhSession);
+
+  // Fetch the gallery page to get title and cover
+  const galleryUrl = `https://nhentai.net/g/${galleryId}/`;
+  const headers = {
+    Cookie: `sessionid=${nhSession.sessionId}; csrftoken=${nhSession.csrfToken}; cf_clearance=${nhSession.cfClearance}`,
+    "User-Agent": nhSession.userAgent || env.NHENTAI_USER_AGENT,
+    Referer: "https://nhentai.net/",
+  };
+
+  let title = `#${galleryId}`;
+  let thumbnail = "";
+
+  try {
+    const res = await fetch(galleryUrl, { headers, redirect: "follow" });
+    if (res.ok) {
+      const html = await res.text();
+      const cheerio = await import("cheerio");
+      const $ = cheerio.load(html);
+
+      title = $("h1.title .pretty").text().trim() ||
+              $("h1.title .after").text().trim() ||
+              $("h1.title").text().trim() ||
+              `#${galleryId}`;
+
+      thumbnail = $("#cover img").attr("data-src") ||
+                  $("#cover img").attr("src") || "";
+    }
+  } catch (err: any) {
+    log.warn(`Failed to fetch page for ${galleryId}: ${err.message}`);
+  }
+
+  return {
+    id: galleryId,
+    title,
+    tags: detail.tags || [],
+    language: detail.language || "",
+    category: detail.category || "",
+    pages: detail.pages || 0,
+    thumbnail,
+    uploadDate: "",
+  };
+}
+
+/**
  * Core logic: fetch a gallery by ID, generate PDF, send cover + PDF.
+ * Works with or without an active session.
  */
 async function handleGetGallery(
   bot: TelegramBot,
@@ -36,14 +108,8 @@ async function handleGetGallery(
       msg.from?.first_name
     );
 
+    // Session is optional — we'll use it if available
     const session = await getActiveSession(userId);
-    if (!session) {
-      await bot.sendMessage(
-        chatId,
-        "⚠️ No active session. Use /session first."
-      );
-      return;
-    }
 
     // Check cache for this specific gallery
     const cacheKey = hashFilters(userId, { tags: [`__gallery_${galleryId}`] });
@@ -59,56 +125,8 @@ async function handleGetGallery(
       `🔄 Fetching gallery #${galleryId}...`
     );
 
-    const nhSession: NhentaiSession = {
-      sessionId: session.sessionId,
-      csrfToken: session.csrfToken,
-      cfClearance: session.cfClearance,
-      userAgent: session.userAgent || undefined,
-    };
-
-    // Fetch gallery detail (tags, language, pages, etc.)
-    const detail = await fetchGalleryDetail(galleryId, nhSession);
-
-    // Fetch the gallery page to get title and cover
-    const galleryUrl = `https://nhentai.net/g/${galleryId}/`;
-    const headers = {
-      Cookie: `sessionid=${nhSession.sessionId}; csrftoken=${nhSession.csrfToken}; cf_clearance=${nhSession.cfClearance}`,
-      "User-Agent": nhSession.userAgent || env.NHENTAI_USER_AGENT,
-      Referer: "https://nhentai.net/",
-    };
-
-    let title = `#${galleryId}`;
-    let thumbnail = "";
-
-    try {
-      const res = await fetch(galleryUrl, { headers, redirect: "follow" });
-      if (res.ok) {
-        const html = await res.text();
-        const cheerio = await import("cheerio");
-        const $ = cheerio.load(html);
-
-        title = $("h1.title .pretty").text().trim() ||
-                $("h1.title .after").text().trim() ||
-                $("h1.title").text().trim() ||
-                `#${galleryId}`;
-
-        thumbnail = $("#cover img").attr("data-src") ||
-                    $("#cover img").attr("src") || "";
-      }
-    } catch (err: any) {
-      log.warn(`Failed to fetch page for ${galleryId}: ${err.message}`);
-    }
-
-    const gallery: Gallery = {
-      id: galleryId,
-      title,
-      tags: detail.tags || [],
-      language: detail.language || "",
-      category: detail.category || "",
-      pages: detail.pages || 0,
-      thumbnail,
-      uploadDate: "",
-    };
+    // Fetch gallery (public API first, then session-based fallback)
+    const gallery = await fetchGallery(galleryId, session);
 
     await bot.editMessageText(
       `📝 Generating PDF for #${galleryId}...`,

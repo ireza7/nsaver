@@ -152,6 +152,80 @@ export async function fetchGalleryDetail(
   return { tags, language, category, pages };
 }
 
+/**
+ * Fetch gallery detail via the public nhentai API (no session required).
+ * Uses https://nhentai.net/api/gallery/{id} which returns JSON.
+ */
+export async function fetchGalleryPublic(
+  galleryId: number
+): Promise<Gallery> {
+  const url = `${BASE_URL}/api/gallery/${galleryId}`;
+  const headers: Record<string, string> = {
+    "User-Agent": env.NHENTAI_USER_AGENT,
+    Accept: "application/json",
+  };
+
+  let body: string;
+  try {
+    body = await fetchPage(url, headers);
+  } catch (err: any) {
+    throw new Error(`Failed to fetch gallery #${galleryId}: ${err.message}`);
+  }
+
+  const data = JSON.parse(body);
+
+  // Parse title
+  const title =
+    data.title?.pretty ||
+    data.title?.english ||
+    data.title?.japanese ||
+    `#${galleryId}`;
+
+  // Parse tags grouped by type
+  const tags: string[] = [];
+  let language = "";
+  let category = "";
+
+  if (Array.isArray(data.tags)) {
+    for (const tag of data.tags) {
+      if (tag.type === "tag") {
+        tags.push(tag.name);
+      } else if (tag.type === "language" && tag.name !== "translated") {
+        language = tag.name;
+      } else if (tag.type === "category") {
+        category = tag.name;
+      }
+    }
+  }
+
+  // Pages count
+  const pages = data.num_pages || (Array.isArray(data.images?.pages) ? data.images.pages.length : 0);
+
+  // Thumbnail
+  const mediaId = data.media_id || "";
+  let thumbnail = "";
+  if (mediaId && data.images?.cover) {
+    const ext = data.images.cover.t === "j" ? "jpg" : data.images.cover.t === "p" ? "png" : "jpg";
+    thumbnail = `https://t.nhentai.net/galleries/${mediaId}/cover.${ext}`;
+  }
+
+  // Upload date
+  const uploadDate = data.upload_date
+    ? new Date(data.upload_date * 1000).toISOString().split("T")[0]
+    : "";
+
+  return {
+    id: galleryId,
+    title,
+    tags,
+    language,
+    category,
+    pages,
+    thumbnail,
+    uploadDate,
+  };
+}
+
 /** Main scraping function: fetches all favorites for a session */
 export async function scrapeFavorites(
   session: NhentaiSession,
