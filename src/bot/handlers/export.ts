@@ -72,7 +72,7 @@ export function registerExportHandler(bot: TelegramBot): void {
         // Try to get first gallery for cover from DB
         const userGalleries = await getUserGalleries(userId);
         const coverGallery = userGalleries.length > 0 ? userGalleries[0] : undefined;
-        await forwardCachedExport(bot, chatId, cached.fileId, coverGallery);
+        await forwardCachedExport(bot, chatId, cached.fileId, coverGallery, cached.description);
         return;
       }
 

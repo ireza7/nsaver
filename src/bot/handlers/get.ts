@@ -141,7 +141,11 @@ async function handleGetGallery(
     const cached = await findCachedExport(userId, cacheKey);
     if (cached) {
       await bot.sendMessage(chatId, "📦 Found cached, sending...");
-      await forwardCachedExport(bot, chatId, cached.fileId);
+      // Fetch gallery info from DB for thumbnail + description
+      const { getUserGalleries } = await import("../../services/gallery.js");
+      const userGalleries = await getUserGalleries(userId);
+      const coverGallery = userGalleries.find((g) => g.id === galleryId);
+      await forwardCachedExport(bot, chatId, cached.fileId, coverGallery, cached.description);
       return;
     }
 
