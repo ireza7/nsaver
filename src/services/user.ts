@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { getDb, schema } from "../db/index.js";
 import { createLogger } from "../utils/index.js";
 
@@ -82,13 +82,17 @@ export async function getActiveSession(
   const rows = await db
     .select()
     .from(schema.sessions)
-    .where(eq(schema.sessions.userId, userId))
-    .orderBy(schema.sessions.createdAt)
+    .where(
+      and(
+        eq(schema.sessions.userId, userId),
+        eq(schema.sessions.isValid, true)
+      )
+    )
+    .orderBy(desc(schema.sessions.createdAt))
     .limit(1);
 
   if (rows.length === 0) return null;
-  const s = rows[rows.length - 1];
-  if (!s.isValid) return null;
+  const s = rows[0];
 
   return {
     sessionId: s.sessionId,

@@ -15,7 +15,20 @@ function buildHeaders(session: NhentaiSession): Record<string, string> {
   };
 }
 
-/** Fetch a single HTML page with retry */
+/**
+ * Check if an error is temporary/retriable.
+ * Inspired by nZip's isTemporaryError in Go core.
+ */
+function isTemporaryError(status: number): boolean {
+  return (
+    status === 408 || // Request Timeout
+    status === 425 || // Too Early
+    status === 429 || // Too Many Requests
+    status >= 500     // Server errors
+  );
+}
+
+/** Fetch a single HTML/text page with retry and exponential backoff */
 async function fetchPage(
   url: string,
   headers: Record<string, string>,
@@ -28,13 +41,28 @@ async function fetchPage(
         throw new Error("403 Forbidden — session cookies may be expired");
       }
       if (!res.ok) {
+        // If the error is temporary, retry; otherwise throw immediately
+        if (!isTemporaryError(res.status) && attempt < retries) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        if (!isTemporaryError(res.status)) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
       return await res.text();
-    } catch (err) {
+    } catch (err: any) {
       if (attempt === retries) throw err;
-      log.warn(`Attempt ${attempt} failed for ${url}, retrying...`);
-      await sleep(2000 * attempt);
+      // Non-retriable HTTP errors should not be retried (e.g. 404)
+      const statusMatch = err.message?.match(/HTTP (\d+)/);
+      if (statusMatch) {
+        const status = parseInt(statusMatch[1], 10);
+        if (!isTemporaryError(status)) throw err;
+      }
+      // Exponential backoff inspired by nZip: base 500ms * 2^(attempt-1), max 30s
+      const delay = Math.min(500 * Math.pow(2, attempt - 1), 30000);
+      log.warn(`Attempt ${attempt} failed for ${url}, retrying in ${delay}ms...`);
+      await sleep(delay);
     }
   }
   throw new Error("Unreachable");
@@ -85,6 +113,63 @@ function parseCategory($: cheerio.CheerioAPI): string {
   return category;
 }
 
+/**
+ * Parse gallery data from the nhentai API JSON response.
+ * Shared between public and session-based API calls.
+ */
+function parseApiGalleryData(data: any, galleryId: number): Gallery {
+  // Parse title
+  const title =
+    data.title?.pretty ||
+    data.title?.english ||
+    data.title?.japanese ||
+    `#${galleryId}`;
+
+  // Parse tags grouped by type
+  const tags: string[] = [];
+  let language = "";
+  let category = "";
+
+  if (Array.isArray(data.tags)) {
+    for (const tag of data.tags) {
+      if (tag.type === "tag") {
+        tags.push(tag.name);
+      } else if (tag.type === "language" && tag.name !== "translated") {
+        language = tag.name;
+      } else if (tag.type === "category") {
+        category = tag.name;
+      }
+    }
+  }
+
+  // Pages count
+  const pages = data.num_pages || (Array.isArray(data.images?.pages) ? data.images.pages.length : 0);
+
+  // Thumbnail — use cover image like nZip does
+  const mediaId = data.media_id || "";
+  let thumbnail = "";
+  if (mediaId && data.images?.cover) {
+    const ext = data.images.cover.t === "j" ? "jpg" : data.images.cover.t === "p" ? "png" : data.images.cover.t === "w" ? "webp" : "jpg";
+    thumbnail = `https://t.nhentai.net/galleries/${mediaId}/cover.${ext}`;
+  }
+
+  // Upload date
+  const uploadDate = data.upload_date
+    ? new Date(data.upload_date * 1000).toISOString().split("T")[0]
+    : "";
+
+  return {
+    id: galleryId,
+    title,
+    tags,
+    language,
+    category,
+    pages,
+    thumbnail,
+    uploadDate,
+  };
+}
+
 /** Parse a gallery listing page and return gallery IDs and titles */
 function parseFavoritesPage(
   html: string
@@ -125,7 +210,7 @@ function parseTotalPages(html: string): number {
   return max;
 }
 
-/** Fetch full detail for a gallery to get tags, pages, etc. */
+/** Fetch full detail for a gallery to get tags, pages, etc. via HTML scraping */
 export async function fetchGalleryDetail(
   galleryId: number,
   session: NhentaiSession
@@ -153,8 +238,41 @@ export async function fetchGalleryDetail(
 }
 
 /**
+ * Fetch gallery detail via the nhentai API using session cookies.
+ * This is the primary method — nhentai blocks unauthenticated API access.
+ * Inspired by nZip's approach of using authenticated API calls.
+ */
+export async function fetchGalleryWithSession(
+  galleryId: number,
+  session: NhentaiSession
+): Promise<Gallery> {
+  const url = `${BASE_URL}/api/gallery/${galleryId}`;
+  const headers: Record<string, string> = {
+    ...buildHeaders(session),
+    Accept: "application/json",
+  };
+
+  let body: string;
+  try {
+    body = await fetchPage(url, headers, 3);
+  } catch (err: any) {
+    throw new Error(`Failed to fetch gallery #${galleryId} via API: ${err.message}`);
+  }
+
+  const data = JSON.parse(body);
+
+  if (data.error) {
+    throw new Error(`Gallery #${galleryId} not found`);
+  }
+
+  return parseApiGalleryData(data, galleryId);
+}
+
+/**
  * Fetch gallery detail via the public nhentai API (no session required).
  * Uses https://nhentai.net/api/gallery/{id} which returns JSON.
+ * NOTE: This often fails with 403/404 due to Cloudflare protection.
+ * Use fetchGalleryWithSession when a session is available.
  */
 export async function fetchGalleryPublic(
   galleryId: number
@@ -163,67 +281,23 @@ export async function fetchGalleryPublic(
   const headers: Record<string, string> = {
     "User-Agent": env.NHENTAI_USER_AGENT,
     Accept: "application/json",
+    Referer: BASE_URL,
   };
 
   let body: string;
   try {
-    body = await fetchPage(url, headers);
+    body = await fetchPage(url, headers, 2);
   } catch (err: any) {
     throw new Error(`Failed to fetch gallery #${galleryId}: ${err.message}`);
   }
 
   const data = JSON.parse(body);
 
-  // Parse title
-  const title =
-    data.title?.pretty ||
-    data.title?.english ||
-    data.title?.japanese ||
-    `#${galleryId}`;
-
-  // Parse tags grouped by type
-  const tags: string[] = [];
-  let language = "";
-  let category = "";
-
-  if (Array.isArray(data.tags)) {
-    for (const tag of data.tags) {
-      if (tag.type === "tag") {
-        tags.push(tag.name);
-      } else if (tag.type === "language" && tag.name !== "translated") {
-        language = tag.name;
-      } else if (tag.type === "category") {
-        category = tag.name;
-      }
-    }
+  if (data.error) {
+    throw new Error(`Gallery #${galleryId} not found`);
   }
 
-  // Pages count
-  const pages = data.num_pages || (Array.isArray(data.images?.pages) ? data.images.pages.length : 0);
-
-  // Thumbnail
-  const mediaId = data.media_id || "";
-  let thumbnail = "";
-  if (mediaId && data.images?.cover) {
-    const ext = data.images.cover.t === "j" ? "jpg" : data.images.cover.t === "p" ? "png" : "jpg";
-    thumbnail = `https://t.nhentai.net/galleries/${mediaId}/cover.${ext}`;
-  }
-
-  // Upload date
-  const uploadDate = data.upload_date
-    ? new Date(data.upload_date * 1000).toISOString().split("T")[0]
-    : "";
-
-  return {
-    id: galleryId,
-    title,
-    tags,
-    language,
-    category,
-    pages,
-    thumbnail,
-    uploadDate,
-  };
+  return parseApiGalleryData(data, galleryId);
 }
 
 /** Main scraping function: fetches all favorites for a session */
@@ -293,16 +367,29 @@ export async function scrapeFavorites(
     }
   }
 
-  // Fetch details for each gallery (tags, language, etc.)
+  // Fetch details for each gallery using session-based API (more reliable)
   log.info(`Fetching details for ${result.galleries.length} galleries...`);
   for (let i = 0; i < result.galleries.length; i++) {
     const g = result.galleries[i];
     try {
-      const detail = await fetchGalleryDetail(g.id, session);
-      g.tags = detail.tags || [];
-      g.language = detail.language || "";
-      g.category = detail.category || "";
-      g.pages = detail.pages || 0;
+      // Try session-based API first (most reliable), fall back to HTML scraping
+      try {
+        const apiGallery = await fetchGalleryWithSession(g.id, session);
+        g.tags = apiGallery.tags;
+        g.language = apiGallery.language;
+        g.category = apiGallery.category;
+        g.pages = apiGallery.pages;
+        g.thumbnail = apiGallery.thumbnail || g.thumbnail;
+        g.uploadDate = apiGallery.uploadDate;
+        g.title = apiGallery.title || g.title;
+      } catch (apiErr: any) {
+        log.warn(`API fetch failed for ${g.id}, falling back to HTML: ${apiErr.message}`);
+        const detail = await fetchGalleryDetail(g.id, session);
+        g.tags = detail.tags || [];
+        g.language = detail.language || "";
+        g.category = detail.category || "";
+        g.pages = detail.pages || 0;
+      }
       if (onProgress) onProgress(i + 1, result.galleries.length);
     } catch (err: any) {
       log.warn(`Failed to get details for ${g.id}: ${err.message}`);

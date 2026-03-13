@@ -1,6 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import { ensureUser, getActiveSession } from "../../services/user.js";
-import { fetchGalleryDetail, fetchGalleryPublic } from "../../scraper/favorites.js";
+import { fetchGalleryDetail, fetchGalleryPublic, fetchGalleryWithSession } from "../../scraper/favorites.js";
 import { generatePdf, cleanupPdf } from "../../pdf/index.js";
 import { uploadToChannel, findCachedExport, forwardCachedExport } from "../../channel/manager.js";
 import { createLogger, hashFilters } from "../../utils/index.js";
@@ -13,74 +13,99 @@ const log = createLogger("handler:get");
 const getLocks = new Set<number>();
 
 /**
- * Fetch gallery info. Tries public API first, falls back to
- * session-based scraping if the user has an active session.
+ * Fetch gallery info. Strategy (inspired by nZip):
+ * 1. If user has an active session, try session-based API first (most reliable)
+ * 2. Fall back to session-based HTML scraping
+ * 3. As last resort, try public API (often blocked by Cloudflare)
  */
 async function fetchGallery(
   galleryId: number,
   session: { sessionId: string; csrfToken: string; cfClearance: string; userAgent: string | null } | null
 ): Promise<Gallery> {
-  // Always try the public API first (no session needed)
+  // If we have a session, try authenticated approaches first
+  if (session) {
+    const nhSession: NhentaiSession = {
+      sessionId: session.sessionId,
+      csrfToken: session.csrfToken,
+      cfClearance: session.cfClearance,
+      userAgent: session.userAgent || undefined,
+    };
+
+    // Try 1: Session-based API call (fastest and most reliable with valid session)
+    try {
+      return await fetchGalleryWithSession(galleryId, nhSession);
+    } catch (apiErr: any) {
+      log.warn(`Session API failed for #${galleryId}: ${apiErr.message}`);
+    }
+
+    // Try 2: Session-based HTML scraping (fallback)
+    try {
+      const detail = await fetchGalleryDetail(galleryId, nhSession);
+
+      // Fetch the gallery page to get title and cover
+      const galleryUrl = `https://nhentai.net/g/${galleryId}/`;
+      const headers = {
+        Cookie: `sessionid=${nhSession.sessionId}; csrftoken=${nhSession.csrfToken}; cf_clearance=${nhSession.cfClearance}`,
+        "User-Agent": nhSession.userAgent || env.NHENTAI_USER_AGENT,
+        Referer: "https://nhentai.net/",
+      };
+
+      let title = `#${galleryId}`;
+      let thumbnail = "";
+
+      try {
+        const res = await fetch(galleryUrl, { headers, redirect: "follow" });
+        if (res.ok) {
+          const html = await res.text();
+          const cheerio = await import("cheerio");
+          const $ = cheerio.load(html);
+
+          title = $("h1.title .pretty").text().trim() ||
+                  $("h1.title .after").text().trim() ||
+                  $("h1.title").text().trim() ||
+                  `#${galleryId}`;
+
+          thumbnail = $("#cover img").attr("data-src") ||
+                      $("#cover img").attr("src") || "";
+        }
+      } catch (err: any) {
+        log.warn(`Failed to fetch page for ${galleryId}: ${err.message}`);
+      }
+
+      return {
+        id: galleryId,
+        title,
+        tags: detail.tags || [],
+        language: detail.language || "",
+        category: detail.category || "",
+        pages: detail.pages || 0,
+        thumbnail,
+        uploadDate: "",
+      };
+    } catch (scrapeErr: any) {
+      log.warn(`Session HTML scraping failed for #${galleryId}: ${scrapeErr.message}`);
+    }
+  }
+
+  // Try 3: Public API (often blocked by Cloudflare, but worth trying as last resort)
   try {
     return await fetchGalleryPublic(galleryId);
   } catch (publicErr: any) {
     log.warn(`Public API failed for #${galleryId}: ${publicErr.message}`);
   }
 
-  // Fall back to session-based scraping if we have a session
+  // All methods failed
   if (!session) {
-    throw new Error("Gallery not accessible via public API and no session is configured.");
+    throw new Error(
+      "Gallery not accessible. No active session configured.\n" +
+      "Use /session to set up your nhentai cookies first."
+    );
   }
 
-  const nhSession: NhentaiSession = {
-    sessionId: session.sessionId,
-    csrfToken: session.csrfToken,
-    cfClearance: session.cfClearance,
-    userAgent: session.userAgent || undefined,
-  };
-
-  const detail = await fetchGalleryDetail(galleryId, nhSession);
-
-  // Fetch the gallery page to get title and cover
-  const galleryUrl = `https://nhentai.net/g/${galleryId}/`;
-  const headers = {
-    Cookie: `sessionid=${nhSession.sessionId}; csrftoken=${nhSession.csrfToken}; cf_clearance=${nhSession.cfClearance}`,
-    "User-Agent": nhSession.userAgent || env.NHENTAI_USER_AGENT,
-    Referer: "https://nhentai.net/",
-  };
-
-  let title = `#${galleryId}`;
-  let thumbnail = "";
-
-  try {
-    const res = await fetch(galleryUrl, { headers, redirect: "follow" });
-    if (res.ok) {
-      const html = await res.text();
-      const cheerio = await import("cheerio");
-      const $ = cheerio.load(html);
-
-      title = $("h1.title .pretty").text().trim() ||
-              $("h1.title .after").text().trim() ||
-              $("h1.title").text().trim() ||
-              `#${galleryId}`;
-
-      thumbnail = $("#cover img").attr("data-src") ||
-                  $("#cover img").attr("src") || "";
-    }
-  } catch (err: any) {
-    log.warn(`Failed to fetch page for ${galleryId}: ${err.message}`);
-  }
-
-  return {
-    id: galleryId,
-    title,
-    tags: detail.tags || [],
-    language: detail.language || "",
-    category: detail.category || "",
-    pages: detail.pages || 0,
-    thumbnail,
-    uploadDate: "",
-  };
+  throw new Error(
+    "Gallery not accessible via any method. Session cookies may be expired.\n" +
+    "Use /session to update your cookies."
+  );
 }
 
 /**

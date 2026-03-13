@@ -1,4 +1,4 @@
-export { scrapeFavorites, fetchGalleryDetail, fetchGalleryPublic } from "./favorites.js";
+export { scrapeFavorites, fetchGalleryDetail, fetchGalleryPublic, fetchGalleryWithSession } from "./favorites.js";
 export {
   filterGalleries,
   extractUniqueTags,
