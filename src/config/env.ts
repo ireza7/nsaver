@@ -31,9 +31,6 @@ export const env = {
   MYSQL_PASSWORD: optional("MYSQL_PASSWORD", "nsaver_password"),
   MYSQL_DATABASE: optional("MYSQL_DATABASE", "nsaver"),
 
-  // nZip
-  NZIP_BASE_URL: optional("NZIP_BASE_URL", "https://nhentai.zip"),
-
   // Scraping
   MAX_PAGES: optionalInt("MAX_PAGES", 0),
   REQUEST_DELAY: optionalInt("REQUEST_DELAY", 2),

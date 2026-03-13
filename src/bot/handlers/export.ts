@@ -69,7 +69,10 @@ export function registerExportHandler(bot: TelegramBot): void {
       const cached = await findCachedExport(userId, filterHash);
       if (cached) {
         await bot.sendMessage(chatId, "📦 Found cached export, forwarding...");
-        await forwardCachedExport(bot, chatId, cached.fileId);
+        // Try to get first gallery for cover from DB
+        const userGalleries = await getUserGalleries(userId);
+        const coverGallery = userGalleries.length > 0 ? userGalleries[0] : undefined;
+        await forwardCachedExport(bot, chatId, cached.fileId, coverGallery);
         return;
       }
 
@@ -127,7 +130,7 @@ export function registerExportHandler(bot: TelegramBot): void {
       const pdfPath = await generatePdf(filtered, username, filterInfo);
 
       try {
-        // Upload to channel
+        // Upload cover + PDF to channel
         const channelResult = await uploadToChannel(
           bot,
           pdfPath,
@@ -139,8 +142,9 @@ export function registerExportHandler(bot: TelegramBot): void {
           filterInfo
         );
 
-        // Forward to user from channel cache
-        await forwardCachedExport(bot, chatId, channelResult.fileId);
+        // Forward cover + PDF to user
+        const coverGallery = filtered.length > 0 ? filtered[0] : undefined;
+        await forwardCachedExport(bot, chatId, channelResult.fileId, coverGallery);
 
         await bot.editMessageText(
           `✅ Done! ${filtered.length} galleries exported.` +
