@@ -7,7 +7,9 @@ import {
   registerSkipHandler,
   registerExportHandler,
   registerFilterHandler,
+  registerGetHandler,
   handleSessionStep,
+  handleNumericCode,
 } from "./handlers/index.js";
 import { loggingMiddleware } from "./middleware/index.js";
 
@@ -38,11 +40,17 @@ export function createBot(): TelegramBot {
   registerSkipHandler(bot);
   registerExportHandler(bot);
   registerFilterHandler(bot);
+  registerGetHandler(bot);
 
-  // Handle non-command text messages (for session setup flow)
+  // Handle non-command text messages (for session setup flow + numeric codes)
   bot.on("message", (msg) => {
     if (msg.text && !msg.text.startsWith("/")) {
-      handleSessionStep(bot, msg);
+      // First try session step handler
+      const consumed = handleSessionStep(bot, msg);
+      // If not consumed by session, try numeric code handler
+      if (!consumed) {
+        handleNumericCode(bot, msg);
+      }
     }
   });
 

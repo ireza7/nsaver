@@ -15,6 +15,7 @@ const WELCOME_TEXT = `
 /session \\- تنظیم سشن nhentai
 /export \\- دریافت PDF از علاقه‌مندی‌ها
 /filter \\- فیلتر بر اساس تگ
+/get \\- دریافت هنتای با کد \\(مثلاً /get 177013\\)
 /status \\- وضعیت سشن فعلی
 /help \\- راهنمای کامل
 
@@ -22,6 +23,7 @@ const WELCOME_TEXT = `
 1\\. ابتدا با /session اطلاعات سشن خود را ارسال کنید
 2\\. سپس با /export فایل PDF علاقه‌مندی‌ها را دریافت کنید
 3\\. با /filter می‌توانید تگ‌های خاصی را فیلتر کنید
+4\\. با /get یا فرستادن عدد کد، یک هنتای خاص را دریافت کنید
 `;
 
 export function registerStartHandler(bot: TelegramBot): void {

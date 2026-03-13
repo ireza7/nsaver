@@ -144,7 +144,9 @@ export function registerFilterHandler(bot: TelegramBot): void {
           filterInfo
         );
 
-        await forwardCachedExport(bot, chatId, channelResult.fileId);
+        // Forward with cover image
+        const coverGallery = filtered.length > 0 ? filtered[0] : undefined;
+        await forwardCachedExport(bot, chatId, channelResult.fileId, coverGallery);
 
         await bot.editMessageText(
           `✅ Done! ${filtered.length} galleries (filtered by: ${tags.join(", ")})`,
@@ -314,7 +316,10 @@ export function registerFilterHandler(bot: TelegramBot): void {
           filterHash,
           filterInfo
         );
-        await forwardCachedExport(bot, chatId, channelResult.fileId);
+
+        const coverGallery = filtered.length > 0 ? filtered[0] : undefined;
+        await forwardCachedExport(bot, chatId, channelResult.fileId, coverGallery);
+
         await bot.editMessageText(
           `✅ Done! ${filtered.length} galleries (excluded: ${excludeTags.join(", ")})`,
           { chat_id: chatId, message_id: statusMsg.message_id }

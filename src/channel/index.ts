@@ -3,4 +3,5 @@ export {
   findCachedExport,
   forwardCachedExport,
   invalidateUserCache,
+  sendGalleryWithCover,
 } from "./manager.js";
