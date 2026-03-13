@@ -13,8 +13,8 @@ RUN npm ci --production=false
 COPY tsconfig.json drizzle.config.ts ./
 COPY src ./src
 
-# Build TypeScript (skip migration — external DB not available at build time)
-RUN npx tsc
+# Build TypeScript and copy migration assets (SQL/JSON not handled by tsc)
+RUN npx tsc && cp -r src/db/migrations dist/db/migrations
 
 # Run as non-root user
 RUN useradd --create-home appuser
