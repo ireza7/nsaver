@@ -145,12 +145,22 @@ function parseApiGalleryData(data: any, galleryId: number): Gallery {
   // Pages count
   const pages = data.num_pages || (Array.isArray(data.images?.pages) ? data.images.pages.length : 0);
 
-  // Thumbnail — use cover image like nZip does
+  // Thumbnail — use cover image with proper CDN URL.
+  // nhentai uses multiple CDN subdomains (t, t2, t3, t5, t7 for thumbnails;
+  // i, i2, i3, i5, i7 for full images). The fallback logic in thumbnail.ts
+  // will try alternate hosts if the primary fails.
+  // nZip uses `${imageHost}/galleries/${mediaId}/1.${ext}` (first page as cover).
+  // We prefer t3.nhentai.net as it tends to be more reliable.
   const mediaId = data.media_id || "";
   let thumbnail = "";
   if (mediaId && data.images?.cover) {
     const ext = data.images.cover.t === "j" ? "jpg" : data.images.cover.t === "p" ? "png" : data.images.cover.t === "w" ? "webp" : "jpg";
-    thumbnail = `https://t.nhentai.net/galleries/${mediaId}/cover.${ext}`;
+    thumbnail = `https://t3.nhentai.net/galleries/${mediaId}/cover.${ext}`;
+  } else if (mediaId && Array.isArray(data.images?.pages) && data.images.pages.length > 0) {
+    // Fallback: use first page as cover (nZip approach)
+    const firstPage = data.images.pages[0];
+    const ext = firstPage.t === "j" ? "jpg" : firstPage.t === "p" ? "png" : firstPage.t === "w" ? "webp" : "jpg";
+    thumbnail = `https://i3.nhentai.net/galleries/${mediaId}/1.${ext}`;
   }
 
   // Upload date
