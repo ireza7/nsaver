@@ -1,7 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
 import { ensureUser, getActiveSession } from "../../services/user.js";
 import { fetchGalleryDetail, fetchGalleryPublic, fetchGalleryWithSession } from "../../scraper/favorites.js";
-import { generatePdf, cleanupPdf } from "../../pdf/index.js";
+import { downloadAndZipGallery, cleanupZip } from "../../zip/index.js";
 import { uploadToChannel, findCachedExport, forwardCachedExport } from "../../channel/manager.js";
 import { createLogger, hashFilters } from "../../utils/index.js";
 import { env } from "../../config/env.js";
@@ -81,6 +81,8 @@ async function fetchGallery(
         pages: detail.pages || 0,
         thumbnail,
         uploadDate: "",
+        mediaId: "",
+        imagePages: [],
       };
     } catch (scrapeErr: any) {
       log.warn(`Session HTML scraping failed for #${galleryId}: ${scrapeErr.message}`);
@@ -109,7 +111,7 @@ async function fetchGallery(
 }
 
 /**
- * Core logic: fetch a gallery by ID, generate PDF, send cover + PDF.
+ * Core logic: fetch a gallery by ID, download images, create ZIP, send cover + ZIP.
  * Works with or without an active session.
  */
 async function handleGetGallery(
@@ -141,11 +143,7 @@ async function handleGetGallery(
     const cached = await findCachedExport(userId, cacheKey);
     if (cached) {
       await bot.sendMessage(chatId, "📦 Found cached, sending...");
-      // Fetch gallery info from DB for thumbnail + description
-      const { getUserGalleries } = await import("../../services/gallery.js");
-      const userGalleries = await getUserGalleries(userId);
-      const coverGallery = userGalleries.find((g) => g.id === galleryId);
-      await forwardCachedExport(bot, chatId, cached.fileId, coverGallery, cached.description);
+      await forwardCachedExport(bot, chatId, cached.fileId, cached.description);
       return;
     }
 
@@ -154,24 +152,54 @@ async function handleGetGallery(
       `🔄 Fetching gallery #${galleryId}...`
     );
 
-    // Fetch gallery (public API first, then session-based fallback)
+    // Fetch gallery (session-based first, then public API fallback)
     const gallery = await fetchGallery(galleryId, session);
 
+    if (!gallery.mediaId || gallery.imagePages.length === 0) {
+      await bot.editMessageText(
+        `⚠️ Gallery #${galleryId} has no downloadable images. The API response may be incomplete.`,
+        { chat_id: chatId, message_id: statusMsg.message_id }
+      );
+      return;
+    }
+
     await bot.editMessageText(
-      `📝 Generating PDF for #${galleryId}...`,
+      `📥 Downloading ${gallery.imagePages.length} images for #${galleryId}...`,
       { chat_id: chatId, message_id: statusMsg.message_id }
     );
 
-    // Generate single-gallery PDF
+    // Download images and create ZIP (nZip pipeline)
     const username = msg.from?.username || `user_${telegramId}`;
     const firstName = msg.from?.first_name || "User";
-    const pdfPath = await generatePdf([gallery], username, `Gallery #${galleryId}`);
+
+    const zipResult = await downloadAndZipGallery(
+      gallery,
+      async (completed, total) => {
+        if (completed % 10 === 0 || completed === total) {
+          try {
+            await bot.editMessageText(
+              `📥 Downloading... ${completed}/${total}`,
+              { chat_id: chatId, message_id: statusMsg.message_id }
+            );
+          } catch {}
+        }
+      },
+      async () => {
+        try {
+          await bot.editMessageText(
+            `📦 Packing ZIP for #${galleryId}...`,
+            { chat_id: chatId, message_id: statusMsg.message_id }
+          );
+        } catch {}
+      }
+    );
 
     try {
-      // Upload cover + PDF to channel
+      // Upload cover + ZIP to channel
       const channelResult = await uploadToChannel(
         bot,
-        pdfPath,
+        zipResult.zipPath,
+        zipResult.coverImagePath,
         userId,
         username,
         firstName,
@@ -180,8 +208,8 @@ async function handleGetGallery(
         `Gallery #${galleryId}`
       );
 
-      // Send cover + PDF to user
-      await forwardCachedExport(bot, chatId, channelResult.fileId, gallery);
+      // Send ZIP to user (from cache)
+      await forwardCachedExport(bot, chatId, channelResult.fileId);
 
       await bot.editMessageText(
         `✅ Gallery #${galleryId} sent!\n` +
@@ -190,7 +218,7 @@ async function handleGetGallery(
         { chat_id: chatId, message_id: statusMsg.message_id }
       );
     } finally {
-      cleanupPdf(pdfPath);
+      cleanupZip(zipResult.zipPath);
     }
   } catch (err: any) {
     log.error("Get error:", err.message);

@@ -7,7 +7,7 @@ import { createLogger } from "./utils/index.js";
 const log = createLogger("main");
 
 async function main() {
-  log.info("nsaver v2.1.0 starting...");
+  log.info("nsaver v3.0.0 starting...");
 
   // Run DB migrations on startup (external MySQL)
   try {

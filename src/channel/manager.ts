@@ -2,7 +2,6 @@ import TelegramBot from "node-telegram-bot-api";
 import { eq, and } from "drizzle-orm";
 import { getDb, schema } from "../db/index.js";
 import { createLogger, truncate } from "../utils/index.js";
-import { downloadThumbnail, cleanupThumbnail } from "../utils/thumbnail.js";
 import { env } from "../config/env.js";
 import type { Gallery } from "../types/index.js";
 import { getTopTags } from "../scraper/filter.js";
@@ -36,7 +35,7 @@ function buildDescription(
 }
 
 /**
- * Build a compact caption for a single gallery thumbnail.
+ * Build a compact caption for a single gallery cover image.
  */
 function buildGalleryCaption(gallery: Gallery): string {
   const tags = gallery.tags.slice(0, 8).join(", ");
@@ -49,37 +48,34 @@ function buildGalleryCaption(gallery: Gallery): string {
 }
 
 /**
- * Send a gallery's cover image + PDF to a chat (channel or user).
- * First sends the thumbnail as a compressed photo, then the PDF.
+ * Send a gallery's cover image + ZIP to a chat (channel or user).
+ * Cover = first image of the gallery (provided as a local file path).
  */
 export async function sendGalleryWithCover(
   bot: TelegramBot,
   chatId: number | string,
   gallery: Gallery,
-  pdfPath: string,
+  zipPath: string,
+  coverImagePath: string | null,
   caption?: string
 ): Promise<{ photoMsgId?: number; docMsgId: number; fileId: string }> {
   let photoMsgId: number | undefined;
 
-  // Try to send thumbnail as a small photo
-  if (gallery.thumbnail) {
+  // Send cover image (first image of the gallery) as photo
+  if (coverImagePath) {
     try {
-      const thumbPath = await downloadThumbnail(gallery.thumbnail, gallery.id);
-      if (thumbPath) {
-        const photoMsg = await bot.sendPhoto(chatId, thumbPath, {
-          caption: buildGalleryCaption(gallery),
-        });
-        photoMsgId = photoMsg.message_id;
-        cleanupThumbnail(thumbPath);
-      }
+      const photoMsg = await bot.sendPhoto(chatId, coverImagePath, {
+        caption: buildGalleryCaption(gallery),
+      });
+      photoMsgId = photoMsg.message_id;
     } catch (err: any) {
-      log.warn(`Failed to send thumbnail for ${gallery.id}: ${err.message}`);
+      log.warn(`Failed to send cover for ${gallery.id}: ${err.message}`);
     }
   }
 
-  // Send PDF
-  const docMsg = await bot.sendDocument(chatId, pdfPath, {
-    caption: caption || `📎 PDF export — ${gallery.title}`,
+  // Send ZIP
+  const docMsg = await bot.sendDocument(chatId, zipPath, {
+    caption: caption || `📎 ZIP export — ${gallery.title}`,
   });
 
   const fileId = docMsg.document?.file_id || "";
@@ -88,12 +84,13 @@ export async function sendGalleryWithCover(
 }
 
 /**
- * Upload cover + PDF to the private channel, store cache entry in DB.
- * Sends the first gallery's cover image, then the PDF document.
+ * Upload cover + ZIP to the private channel, store cache entry in DB.
+ * Cover is taken from the coverImagePath (first image of the first gallery).
  */
 export async function uploadToChannel(
   bot: TelegramBot,
-  pdfPath: string,
+  zipPath: string,
+  coverImagePath: string | null,
   userId: number,
   username: string,
   firstName: string,
@@ -113,24 +110,20 @@ export async function uploadToChannel(
 
   log.info(`Uploading to channel ${channelId}...`);
 
-  // Send cover image of first gallery to channel
+  // Send cover image of first gallery to channel (first image, not thumbnail)
   const firstGallery = galleries[0];
-  if (firstGallery?.thumbnail) {
+  if (coverImagePath && firstGallery) {
     try {
-      const thumbPath = await downloadThumbnail(firstGallery.thumbnail, firstGallery.id);
-      if (thumbPath) {
-        await bot.sendPhoto(channelId, thumbPath, {
-          caption: buildGalleryCaption(firstGallery),
-        });
-        cleanupThumbnail(thumbPath);
-      }
+      await bot.sendPhoto(channelId, coverImagePath, {
+        caption: buildGalleryCaption(firstGallery),
+      });
     } catch (err: any) {
-      log.warn(`Failed to send channel thumbnail: ${err.message}`);
+      log.warn(`Failed to send channel cover: ${err.message}`);
     }
   }
 
-  // Send PDF to channel
-  const msg = await bot.sendDocument(channelId, pdfPath, {
+  // Send ZIP to channel
+  const msg = await bot.sendDocument(channelId, zipPath, {
     caption: description,
   });
 
@@ -184,31 +177,18 @@ export async function findCachedExport(
 }
 
 /**
- * Forward a cached document from channel to user, with cover image.
+ * Forward a cached document from channel to user.
+ * For cached exports we don't re-send a cover image since the ZIP file_id
+ * is what's being forwarded. The user already received the cover on the
+ * first export.
  */
 export async function forwardCachedExport(
   bot: TelegramBot,
   chatId: number,
   fileId: string,
-  coverGallery?: Gallery,
   description?: string | null
 ): Promise<void> {
   log.info(`Forwarding cached document to ${chatId}`);
-
-  // Send cover image first if available
-  if (coverGallery?.thumbnail) {
-    try {
-      const thumbPath = await downloadThumbnail(coverGallery.thumbnail, coverGallery.id);
-      if (thumbPath) {
-        await bot.sendPhoto(chatId, thumbPath, {
-          caption: buildGalleryCaption(coverGallery),
-        });
-        cleanupThumbnail(thumbPath);
-      }
-    } catch (err: any) {
-      log.warn(`Failed to send cached thumbnail: ${err.message}`);
-    }
-  }
 
   const caption = description || "📎 Here's your favorites export!";
   await bot.sendDocument(chatId, fileId, {

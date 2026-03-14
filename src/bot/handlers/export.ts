@@ -1,13 +1,13 @@
 import TelegramBot from "node-telegram-bot-api";
 import { ensureUser, getActiveSession } from "../../services/user.js";
-import { saveGalleries, getUserGalleries } from "../../services/gallery.js";
+import { saveGalleries } from "../../services/gallery.js";
 import {
   uploadToChannel,
   findCachedExport,
   forwardCachedExport,
 } from "../../channel/manager.js";
 import { scrapeFavorites, filterGalleries } from "../../scraper/index.js";
-import { generatePdf, cleanupPdf } from "../../pdf/index.js";
+import { downloadAndZipGallery, cleanupZip } from "../../zip/index.js";
 import { createLogger, hashFilters } from "../../utils/index.js";
 import { env } from "../../config/env.js";
 import type { FilterOptions, NhentaiSession } from "../../types/index.js";
@@ -69,10 +69,7 @@ export function registerExportHandler(bot: TelegramBot): void {
       const cached = await findCachedExport(userId, filterHash);
       if (cached) {
         await bot.sendMessage(chatId, "📦 Found cached export, forwarding...");
-        // Try to get first gallery for cover from DB
-        const userGalleries = await getUserGalleries(userId);
-        const coverGallery = userGalleries.length > 0 ? userGalleries[0] : undefined;
-        await forwardCachedExport(bot, chatId, cached.fileId, coverGallery, cached.description);
+        await forwardCachedExport(bot, chatId, cached.fileId, cached.description);
         return;
       }
 
@@ -115,25 +112,57 @@ export function registerExportHandler(bot: TelegramBot): void {
       // Apply filters
       const filtered = filterGalleries(result.galleries, filters);
 
+      // For export, download + zip the first gallery that has imagePages
+      // (single gallery ZIP per export, matching nZip behaviour)
+      const galleryWithImages = filtered.find(
+        (g) => g.mediaId && g.imagePages.length > 0
+      );
+
+      if (!galleryWithImages) {
+        await bot.editMessageText(
+          "⚠️ No galleries with downloadable images found.",
+          { chat_id: chatId, message_id: statusMsg.message_id }
+        );
+        return;
+      }
+
       await bot.editMessageText(
-        `📝 Generating PDF for ${filtered.length} galleries...`,
+        `📥 Downloading ${galleryWithImages.imagePages.length} images for #${galleryWithImages.id}...`,
         { chat_id: chatId, message_id: statusMsg.message_id }
       );
 
-      // Generate PDF
       const username = msg.from?.username || `user_${telegramId}`;
       const firstName = msg.from?.first_name || "User";
-      const filterInfo = maxCount
-        ? `Max: ${maxCount}`
-        : undefined;
+      const filterInfo = maxCount ? `Max: ${maxCount}` : undefined;
 
-      const pdfPath = await generatePdf(filtered, username, filterInfo);
+      const zipResult = await downloadAndZipGallery(
+        galleryWithImages,
+        async (completed, total) => {
+          if (completed % 10 === 0 || completed === total) {
+            try {
+              await bot.editMessageText(
+                `📥 Downloading images... ${completed}/${total}`,
+                { chat_id: chatId, message_id: statusMsg.message_id }
+              );
+            } catch {}
+          }
+        },
+        async () => {
+          try {
+            await bot.editMessageText(
+              `📦 Packing ZIP...`,
+              { chat_id: chatId, message_id: statusMsg.message_id }
+            );
+          } catch {}
+        }
+      );
 
       try {
-        // Upload cover + PDF to channel
+        // Upload cover + ZIP to channel
         const channelResult = await uploadToChannel(
           bot,
-          pdfPath,
+          zipResult.zipPath,
+          zipResult.coverImagePath,
           userId,
           username,
           firstName,
@@ -142,19 +171,18 @@ export function registerExportHandler(bot: TelegramBot): void {
           filterInfo
         );
 
-        // Forward cover + PDF to user
-        const coverGallery = filtered.length > 0 ? filtered[0] : undefined;
-        await forwardCachedExport(bot, chatId, channelResult.fileId, coverGallery);
+        // Forward ZIP to user
+        await forwardCachedExport(bot, chatId, channelResult.fileId);
 
         await bot.editMessageText(
-          `✅ Done! ${filtered.length} galleries exported.` +
+          `✅ Done! Gallery #${galleryWithImages.id} exported as ZIP.` +
             (result.errors.length > 0
               ? `\n⚠️ ${result.errors.length} errors occurred.`
               : ""),
           { chat_id: chatId, message_id: statusMsg.message_id }
         );
       } finally {
-        cleanupPdf(pdfPath);
+        cleanupZip(zipResult.zipPath);
       }
     } catch (err: any) {
       log.error("Export error:", err.message);

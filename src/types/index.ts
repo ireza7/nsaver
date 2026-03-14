@@ -1,3 +1,13 @@
+/** Image page type code from nhentai API (j=jpg, p=png, g=gif, w=webp) */
+export type ImageTypeCode = "j" | "p" | "g" | "w";
+
+/** A single image page from the nhentai API */
+export interface ImagePage {
+  t: ImageTypeCode;
+  w: number;
+  h: number;
+}
+
 /** Represents a single nhentai gallery extracted from favorites */
 export interface Gallery {
   id: number;
@@ -8,6 +18,10 @@ export interface Gallery {
   thumbnail: string;
   pages: number;
   uploadDate: string;
+  /** nhentai media_id — needed to build image download URLs */
+  mediaId: string;
+  /** Per-page image metadata from the API (type, width, height) */
+  imagePages: ImagePage[];
 }
 
 /** User-provided nhentai session cookies */
