@@ -1,7 +1,7 @@
 {
   "name": "nsaver",
-  "version": "2.1.0",
-  "description": "nhentai favorites exporter Telegram bot with PDF generation, channel caching, and nZip integration",
+  "version": "3.0.0",
+  "description": "nhentai gallery downloader Telegram bot with nZip-style ZIP generation, channel caching, and concurrent image downloads",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc && cp -r src/db/migrations dist/db/migrations",
@@ -13,23 +13,31 @@
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["nhentai", "telegram", "bot", "favorites", "pdf", "nzip"],
+  "keywords": [
+    "nhentai",
+    "telegram",
+    "bot",
+    "favorites",
+    "zip",
+    "nzip",
+    "download"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "archiver": "^7.0.1",
+    "cheerio": "^1.0.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.39.0",
     "mysql2": "^3.12.0",
-    "node-telegram-bot-api": "^0.66.0",
-    "pdfkit": "^0.15.1",
-    "cheerio": "^1.0.0"
+    "node-telegram-bot-api": "^0.66.0"
   },
   "devDependencies": {
+    "@types/archiver": "^7.0.0",
     "@types/node": "^22.12.0",
     "@types/node-telegram-bot-api": "^0.64.7",
-    "@types/pdfkit": "^0.13.8",
     "drizzle-kit": "^0.30.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"

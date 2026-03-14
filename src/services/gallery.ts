@@ -98,5 +98,7 @@ export async function getUserGalleries(
     pages: r.pages,
     thumbnail: r.thumbnail,
     uploadDate: "",
+    mediaId: "",
+    imagePages: [],
   }));
 }

@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import { env } from "../config/env.js";
 import { createLogger, sleep } from "../utils/index.js";
-import type { Gallery, NhentaiSession, ScrapeResult } from "../types/index.js";
+import type { Gallery, ImagePage, NhentaiSession, ScrapeResult } from "../types/index.js";
 
 const log = createLogger("scraper");
 
@@ -168,6 +168,18 @@ function parseApiGalleryData(data: any, galleryId: number): Gallery {
     ? new Date(data.upload_date * 1000).toISOString().split("T")[0]
     : "";
 
+  // Extract mediaId and imagePages for ZIP generation (nZip approach)
+  const imagePages: ImagePage[] = [];
+  if (Array.isArray(data.images?.pages)) {
+    for (const p of data.images.pages) {
+      imagePages.push({
+        t: p.t || "j",
+        w: p.w || 0,
+        h: p.h || 0,
+      });
+    }
+  }
+
   return {
     id: galleryId,
     title,
@@ -177,6 +189,8 @@ function parseApiGalleryData(data: any, galleryId: number): Gallery {
     pages,
     thumbnail,
     uploadDate,
+    mediaId: mediaId || "",
+    imagePages,
   };
 }
 
@@ -361,6 +375,8 @@ export async function scrapeFavorites(
           thumbnail: item.thumbnail,
           pages: 0,
           uploadDate: "",
+          mediaId: "",
+          imagePages: [],
         });
       }
 
@@ -392,6 +408,8 @@ export async function scrapeFavorites(
         g.thumbnail = apiGallery.thumbnail || g.thumbnail;
         g.uploadDate = apiGallery.uploadDate;
         g.title = apiGallery.title || g.title;
+        g.mediaId = apiGallery.mediaId || g.mediaId;
+        g.imagePages = apiGallery.imagePages.length > 0 ? apiGallery.imagePages : g.imagePages;
       } catch (apiErr: any) {
         log.warn(`API fetch failed for ${g.id}, falling back to HTML: ${apiErr.message}`);
         const detail = await fetchGalleryDetail(g.id, session);

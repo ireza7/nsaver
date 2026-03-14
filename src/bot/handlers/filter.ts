@@ -12,7 +12,7 @@ import {
   extractUniqueTags,
   getTopTags,
 } from "../../scraper/index.js";
-import { generatePdf, cleanupPdf } from "../../pdf/index.js";
+import { downloadAndZipGallery, cleanupZip } from "../../zip/index.js";
 import { createLogger, hashFilters } from "../../utils/index.js";
 import { env } from "../../config/env.js";
 import type { FilterOptions, NhentaiSession } from "../../types/index.js";
@@ -83,11 +83,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
       const cached = await findCachedExport(userId, filterHash);
       if (cached) {
         await bot.sendMessage(chatId, "📦 Found cached export...");
-        // Fetch gallery info from DB for cover thumbnail + description
-        const { getUserGalleries } = await import("../../services/gallery.js");
-        const userGalleries = await getUserGalleries(userId);
-        const coverGallery = userGalleries.length > 0 ? userGalleries[0] : undefined;
-        await forwardCachedExport(bot, chatId, cached.fileId, coverGallery, cached.description);
+        await forwardCachedExport(bot, chatId, cached.fileId, cached.description);
         return;
       }
 
@@ -125,8 +121,21 @@ export function registerFilterHandler(bot: TelegramBot): void {
         return;
       }
 
+      // Pick first gallery with image data to download as ZIP
+      const galleryWithImages = filtered.find(
+        (g) => g.mediaId && g.imagePages.length > 0
+      );
+
+      if (!galleryWithImages) {
+        await bot.editMessageText(
+          "⚠️ No galleries with downloadable images found.",
+          { chat_id: chatId, message_id: statusMsg.message_id }
+        );
+        return;
+      }
+
       await bot.editMessageText(
-        `📝 Generating PDF for ${filtered.length} filtered galleries...`,
+        `📥 Downloading ${galleryWithImages.imagePages.length} images for #${galleryWithImages.id}...`,
         { chat_id: chatId, message_id: statusMsg.message_id }
       );
 
@@ -134,12 +143,33 @@ export function registerFilterHandler(bot: TelegramBot): void {
       const firstName = msg.from?.first_name || "User";
       const filterInfo = `Tags: ${tags.join(", ")}${maxCount ? ` | Max: ${maxCount}` : ""}`;
 
-      const pdfPath = await generatePdf(filtered, username, filterInfo);
+      const zipResult = await downloadAndZipGallery(
+        galleryWithImages,
+        async (completed, total) => {
+          if (completed % 10 === 0 || completed === total) {
+            try {
+              await bot.editMessageText(
+                `📥 Downloading... ${completed}/${total}`,
+                { chat_id: chatId, message_id: statusMsg.message_id }
+              );
+            } catch {}
+          }
+        },
+        async () => {
+          try {
+            await bot.editMessageText(
+              `📦 Packing ZIP...`,
+              { chat_id: chatId, message_id: statusMsg.message_id }
+            );
+          } catch {}
+        }
+      );
 
       try {
         const channelResult = await uploadToChannel(
           bot,
-          pdfPath,
+          zipResult.zipPath,
+          zipResult.coverImagePath,
           userId,
           username,
           firstName,
@@ -148,16 +178,15 @@ export function registerFilterHandler(bot: TelegramBot): void {
           filterInfo
         );
 
-        // Forward with cover image
-        const coverGallery = filtered.length > 0 ? filtered[0] : undefined;
-        await forwardCachedExport(bot, chatId, channelResult.fileId, coverGallery);
+        // Forward ZIP to user
+        await forwardCachedExport(bot, chatId, channelResult.fileId);
 
         await bot.editMessageText(
-          `✅ Done! ${filtered.length} galleries (filtered by: ${tags.join(", ")})`,
+          `✅ Done! Gallery #${galleryWithImages.id} (filtered by: ${tags.join(", ")})`,
           { chat_id: chatId, message_id: statusMsg.message_id }
         );
       } finally {
-        cleanupPdf(pdfPath);
+        cleanupZip(zipResult.zipPath);
       }
     } catch (err: any) {
       log.error("Filter error:", err.message);
@@ -268,11 +297,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
       const cached = await findCachedExport(userId, filterHash);
       if (cached) {
         await bot.sendMessage(chatId, "📦 Found cached export...");
-        // Fetch gallery info from DB for cover thumbnail + description
-        const { getUserGalleries } = await import("../../services/gallery.js");
-        const userGalleries = await getUserGalleries(userId);
-        const coverGallery = userGalleries.length > 0 ? userGalleries[0] : undefined;
-        await forwardCachedExport(bot, chatId, cached.fileId, coverGallery, cached.description);
+        await forwardCachedExport(bot, chatId, cached.fileId, cached.description);
         return;
       }
 
@@ -308,15 +333,55 @@ export function registerFilterHandler(bot: TelegramBot): void {
         return;
       }
 
+      // Pick first gallery with image data
+      const galleryWithImages = filtered.find(
+        (g) => g.mediaId && g.imagePages.length > 0
+      );
+
+      if (!galleryWithImages) {
+        await bot.editMessageText(
+          "⚠️ No galleries with downloadable images found.",
+          { chat_id: chatId, message_id: statusMsg.message_id }
+        );
+        return;
+      }
+
+      await bot.editMessageText(
+        `📥 Downloading ${galleryWithImages.imagePages.length} images for #${galleryWithImages.id}...`,
+        { chat_id: chatId, message_id: statusMsg.message_id }
+      );
+
       const username = msg.from?.username || `user_${telegramId}`;
       const firstName = msg.from?.first_name || "User";
       const filterInfo = `Excluded: ${excludeTags.join(", ")}${maxCount ? ` | Max: ${maxCount}` : ""}`;
 
-      const pdfPath = await generatePdf(filtered, username, filterInfo);
+      const zipResult = await downloadAndZipGallery(
+        galleryWithImages,
+        async (completed, total) => {
+          if (completed % 10 === 0 || completed === total) {
+            try {
+              await bot.editMessageText(
+                `📥 Downloading... ${completed}/${total}`,
+                { chat_id: chatId, message_id: statusMsg.message_id }
+              );
+            } catch {}
+          }
+        },
+        async () => {
+          try {
+            await bot.editMessageText(
+              `📦 Packing ZIP...`,
+              { chat_id: chatId, message_id: statusMsg.message_id }
+            );
+          } catch {}
+        }
+      );
+
       try {
         const channelResult = await uploadToChannel(
           bot,
-          pdfPath,
+          zipResult.zipPath,
+          zipResult.coverImagePath,
           userId,
           username,
           firstName,
@@ -325,15 +390,14 @@ export function registerFilterHandler(bot: TelegramBot): void {
           filterInfo
         );
 
-        const coverGallery = filtered.length > 0 ? filtered[0] : undefined;
-        await forwardCachedExport(bot, chatId, channelResult.fileId, coverGallery);
+        await forwardCachedExport(bot, chatId, channelResult.fileId);
 
         await bot.editMessageText(
-          `✅ Done! ${filtered.length} galleries (excluded: ${excludeTags.join(", ")})`,
+          `✅ Done! Gallery #${galleryWithImages.id} (excluded: ${excludeTags.join(", ")})`,
           { chat_id: chatId, message_id: statusMsg.message_id }
         );
       } finally {
-        cleanupPdf(pdfPath);
+        cleanupZip(zipResult.zipPath);
       }
     } catch (err: any) {
       log.error("Exclude error:", err.message);
