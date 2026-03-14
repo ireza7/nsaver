@@ -1,3 +1,2 @@
-// PDF generation removed — replaced by ZIP-based gallery download.
-// See src/zip/ for the new implementation.
-export { downloadAndZipGallery, cleanupZip } from "../zip/index.js";
+export { downloadAndCreatePdf, cleanupPdf } from "./generator.js";
+export type { PdfResult } from "./generator.js";

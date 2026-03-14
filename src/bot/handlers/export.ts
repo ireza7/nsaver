@@ -5,9 +5,10 @@ import {
   uploadToChannel,
   findCachedExport,
   forwardCachedExport,
+  sendCoverWithCaption,
 } from "../../channel/manager.js";
 import { scrapeFavorites, filterGalleries } from "../../scraper/index.js";
-import { downloadAndZipGallery, cleanupZip } from "../../zip/index.js";
+import { downloadAndCreatePdf, cleanupPdf } from "../../pdf/index.js";
 import { createLogger, hashFilters } from "../../utils/index.js";
 import { env } from "../../config/env.js";
 import type { FilterOptions, NhentaiSession } from "../../types/index.js";
@@ -112,8 +113,7 @@ export function registerExportHandler(bot: TelegramBot): void {
       // Apply filters
       const filtered = filterGalleries(result.galleries, filters);
 
-      // For export, download + zip the first gallery that has imagePages
-      // (single gallery ZIP per export, matching nZip behaviour)
+      // For export, download + create PDF for the first gallery that has imagePages
       const galleryWithImages = filtered.find(
         (g) => g.mediaId && g.imagePages.length > 0
       );
@@ -135,7 +135,7 @@ export function registerExportHandler(bot: TelegramBot): void {
       const firstName = msg.from?.first_name || "User";
       const filterInfo = maxCount ? `Max: ${maxCount}` : undefined;
 
-      const zipResult = await downloadAndZipGallery(
+      const pdfResult = await downloadAndCreatePdf(
         galleryWithImages,
         async (completed, total) => {
           if (completed % 10 === 0 || completed === total) {
@@ -150,7 +150,7 @@ export function registerExportHandler(bot: TelegramBot): void {
         async () => {
           try {
             await bot.editMessageText(
-              `📦 Packing ZIP...`,
+              `📄 Creating PDF...`,
               { chat_id: chatId, message_id: statusMsg.message_id }
             );
           } catch {}
@@ -158,11 +158,14 @@ export function registerExportHandler(bot: TelegramBot): void {
       );
 
       try {
-        // Upload cover + ZIP to channel
+        // Send cover image with caption to the user
+        await sendCoverWithCaption(bot, chatId, galleryWithImages, pdfResult.coverImagePath);
+
+        // Upload cover + PDF to channel
         const channelResult = await uploadToChannel(
           bot,
-          zipResult.zipPath,
-          zipResult.coverImagePath,
+          pdfResult.pdfPath,
+          pdfResult.coverImagePath,
           userId,
           username,
           firstName,
@@ -171,18 +174,18 @@ export function registerExportHandler(bot: TelegramBot): void {
           filterInfo
         );
 
-        // Forward ZIP to user
+        // Forward PDF to user
         await forwardCachedExport(bot, chatId, channelResult.fileId);
 
         await bot.editMessageText(
-          `✅ Done! Gallery #${galleryWithImages.id} exported as ZIP.` +
+          `✅ Done! Gallery #${galleryWithImages.id} exported as PDF.` +
             (result.errors.length > 0
               ? `\n⚠️ ${result.errors.length} errors occurred.`
               : ""),
           { chat_id: chatId, message_id: statusMsg.message_id }
         );
       } finally {
-        cleanupZip(zipResult.zipPath);
+        cleanupPdf(pdfResult.pdfPath);
       }
     } catch (err: any) {
       log.error("Export error:", err.message);

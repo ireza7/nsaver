@@ -48,34 +48,47 @@ function buildGalleryCaption(gallery: Gallery): string {
 }
 
 /**
- * Send a gallery's cover image + ZIP to a chat (channel or user).
+ * Send a gallery's cover image + caption to a chat.
+ * Cover = first image of the gallery (provided as a local file path).
+ * Always sends the cover image with caption to the user before the document.
+ */
+export async function sendCoverWithCaption(
+  bot: TelegramBot,
+  chatId: number | string,
+  gallery: Gallery,
+  coverImagePath: string | null
+): Promise<number | undefined> {
+  if (!coverImagePath) return undefined;
+
+  try {
+    const photoMsg = await bot.sendPhoto(chatId, coverImagePath, {
+      caption: buildGalleryCaption(gallery),
+    });
+    return photoMsg.message_id;
+  } catch (err: any) {
+    log.warn(`Failed to send cover for ${gallery.id}: ${err.message}`);
+    return undefined;
+  }
+}
+
+/**
+ * Send a gallery's cover image + PDF to a chat (channel or user).
  * Cover = first image of the gallery (provided as a local file path).
  */
 export async function sendGalleryWithCover(
   bot: TelegramBot,
   chatId: number | string,
   gallery: Gallery,
-  zipPath: string,
+  pdfPath: string,
   coverImagePath: string | null,
   caption?: string
 ): Promise<{ photoMsgId?: number; docMsgId: number; fileId: string }> {
-  let photoMsgId: number | undefined;
+  // Send cover image (first image of the gallery) as photo with caption
+  const photoMsgId = await sendCoverWithCaption(bot, chatId, gallery, coverImagePath);
 
-  // Send cover image (first image of the gallery) as photo
-  if (coverImagePath) {
-    try {
-      const photoMsg = await bot.sendPhoto(chatId, coverImagePath, {
-        caption: buildGalleryCaption(gallery),
-      });
-      photoMsgId = photoMsg.message_id;
-    } catch (err: any) {
-      log.warn(`Failed to send cover for ${gallery.id}: ${err.message}`);
-    }
-  }
-
-  // Send ZIP
-  const docMsg = await bot.sendDocument(chatId, zipPath, {
-    caption: caption || `📎 ZIP export — ${gallery.title}`,
+  // Send PDF
+  const docMsg = await bot.sendDocument(chatId, pdfPath, {
+    caption: caption || `📎 PDF export — ${gallery.title}`,
   });
 
   const fileId = docMsg.document?.file_id || "";
@@ -84,12 +97,12 @@ export async function sendGalleryWithCover(
 }
 
 /**
- * Upload cover + ZIP to the private channel, store cache entry in DB.
+ * Upload cover + PDF to the private channel, store cache entry in DB.
  * Cover is taken from the coverImagePath (first image of the first gallery).
  */
 export async function uploadToChannel(
   bot: TelegramBot,
-  zipPath: string,
+  pdfPath: string,
   coverImagePath: string | null,
   userId: number,
   username: string,
@@ -122,8 +135,8 @@ export async function uploadToChannel(
     }
   }
 
-  // Send ZIP to channel
-  const msg = await bot.sendDocument(channelId, zipPath, {
+  // Send PDF to channel
+  const msg = await bot.sendDocument(channelId, pdfPath, {
     caption: description,
   });
 
@@ -178,9 +191,7 @@ export async function findCachedExport(
 
 /**
  * Forward a cached document from channel to user.
- * For cached exports we don't re-send a cover image since the ZIP file_id
- * is what's being forwarded. The user already received the cover on the
- * first export.
+ * For cached exports we forward the PDF file_id.
  */
 export async function forwardCachedExport(
   bot: TelegramBot,

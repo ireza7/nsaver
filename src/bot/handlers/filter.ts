@@ -5,6 +5,7 @@ import {
   uploadToChannel,
   findCachedExport,
   forwardCachedExport,
+  sendCoverWithCaption,
 } from "../../channel/manager.js";
 import {
   scrapeFavorites,
@@ -12,7 +13,7 @@ import {
   extractUniqueTags,
   getTopTags,
 } from "../../scraper/index.js";
-import { downloadAndZipGallery, cleanupZip } from "../../zip/index.js";
+import { downloadAndCreatePdf, cleanupPdf } from "../../pdf/index.js";
 import { createLogger, hashFilters } from "../../utils/index.js";
 import { env } from "../../config/env.js";
 import type { FilterOptions, NhentaiSession } from "../../types/index.js";
@@ -121,7 +122,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
         return;
       }
 
-      // Pick first gallery with image data to download as ZIP
+      // Pick first gallery with image data to download as PDF
       const galleryWithImages = filtered.find(
         (g) => g.mediaId && g.imagePages.length > 0
       );
@@ -143,7 +144,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
       const firstName = msg.from?.first_name || "User";
       const filterInfo = `Tags: ${tags.join(", ")}${maxCount ? ` | Max: ${maxCount}` : ""}`;
 
-      const zipResult = await downloadAndZipGallery(
+      const pdfResult = await downloadAndCreatePdf(
         galleryWithImages,
         async (completed, total) => {
           if (completed % 10 === 0 || completed === total) {
@@ -158,7 +159,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
         async () => {
           try {
             await bot.editMessageText(
-              `📦 Packing ZIP...`,
+              `📄 Creating PDF...`,
               { chat_id: chatId, message_id: statusMsg.message_id }
             );
           } catch {}
@@ -166,10 +167,13 @@ export function registerFilterHandler(bot: TelegramBot): void {
       );
 
       try {
+        // Send cover image with caption to the user
+        await sendCoverWithCaption(bot, chatId, galleryWithImages, pdfResult.coverImagePath);
+
         const channelResult = await uploadToChannel(
           bot,
-          zipResult.zipPath,
-          zipResult.coverImagePath,
+          pdfResult.pdfPath,
+          pdfResult.coverImagePath,
           userId,
           username,
           firstName,
@@ -178,7 +182,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
           filterInfo
         );
 
-        // Forward ZIP to user
+        // Forward PDF to user
         await forwardCachedExport(bot, chatId, channelResult.fileId);
 
         await bot.editMessageText(
@@ -186,7 +190,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
           { chat_id: chatId, message_id: statusMsg.message_id }
         );
       } finally {
-        cleanupZip(zipResult.zipPath);
+        cleanupPdf(pdfResult.pdfPath);
       }
     } catch (err: any) {
       log.error("Filter error:", err.message);
@@ -355,7 +359,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
       const firstName = msg.from?.first_name || "User";
       const filterInfo = `Excluded: ${excludeTags.join(", ")}${maxCount ? ` | Max: ${maxCount}` : ""}`;
 
-      const zipResult = await downloadAndZipGallery(
+      const pdfResult = await downloadAndCreatePdf(
         galleryWithImages,
         async (completed, total) => {
           if (completed % 10 === 0 || completed === total) {
@@ -370,7 +374,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
         async () => {
           try {
             await bot.editMessageText(
-              `📦 Packing ZIP...`,
+              `📄 Creating PDF...`,
               { chat_id: chatId, message_id: statusMsg.message_id }
             );
           } catch {}
@@ -378,10 +382,13 @@ export function registerFilterHandler(bot: TelegramBot): void {
       );
 
       try {
+        // Send cover image with caption to the user
+        await sendCoverWithCaption(bot, chatId, galleryWithImages, pdfResult.coverImagePath);
+
         const channelResult = await uploadToChannel(
           bot,
-          zipResult.zipPath,
-          zipResult.coverImagePath,
+          pdfResult.pdfPath,
+          pdfResult.coverImagePath,
           userId,
           username,
           firstName,
@@ -397,7 +404,7 @@ export function registerFilterHandler(bot: TelegramBot): void {
           { chat_id: chatId, message_id: statusMsg.message_id }
         );
       } finally {
-        cleanupZip(zipResult.zipPath);
+        cleanupPdf(pdfResult.pdfPath);
       }
     } catch (err: any) {
       log.error("Exclude error:", err.message);
